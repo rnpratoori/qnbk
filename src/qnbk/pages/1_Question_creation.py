@@ -8,6 +8,7 @@ import streamlit as st
 from loguru import logger
 
 from qnbk import DEFAULT_QUESTIONS_DIR
+from qnbk.question_index import upsert_question
 from qnbk.utils import write_md_file, render_chemistry_preview, chemistry_help_panel
 
 QUESTIONS_DIR = DEFAULT_QUESTIONS_DIR
@@ -120,7 +121,7 @@ def main() -> None:
 
         correct_answers = st.text_input(
             "Correct answer(s)",
-            help="Enter the option letter(s) (e.g. A, B) or the text/LaTeX answer for open-response (e.g. \\ce{CaCO3}).",
+            help="Enter the option letter(s) (e.g. A, B) or the text/LaTeX answer for open-response (e.g. \ce{CaCO3}).",
         )
 
         solution_text = st.text_area("Solution", height=200, value="")
@@ -191,11 +192,15 @@ def main() -> None:
         try:
             logger.info(f"Writing {qdict} to file: {filepath}")
             write_md_file(qdict, filepath)
+            try:
+                upsert_question(qdict, filepath, Path(output_dir_base.strip()))
+            except Exception as e_idx:
+                logger.warning(f"Could not update index: {e_idx}")
         except Exception as e:
             st.error(f"Error writing file: {e}")
             return
 
-        st.success(f"Saved question to: `{filepath}`")
+        st.success(f"Saved question to: `{filepath}` (and updated index)")
         with open(filepath, encoding="utf-8") as f:
             content = f.read()
         st.code(content, language="md")

@@ -42,8 +42,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
+from loguru import logger
 
 from qnbk import DEFAULT_QUESTIONS_DIR
+from qnbk.question_index import upsert_question
 from qnbk.utils import render_chemistry_preview, chemistry_help_panel
 
 st.set_page_config(page_title="Question File Editor", layout="wide")
@@ -291,6 +293,23 @@ if raw:
                 st.success(f"Saved to: {target_path}")
             except Exception as e:
                 save_errors.append(f"Could not save to {target_path}: {e}")
+
+        if saved:
+            actual_saved_path = Path(display_name if (overwrite and file_path) else target_path)
+            try:
+                upsert_question(
+                    {
+                        "meta": final_meta,
+                        "question_text": final_question,
+                        "options": final_options,
+                        "solution": final_solution,
+                        "body": final_question,
+                    },
+                    file_path=actual_saved_path,
+                    qdir=questions_root,
+                )
+            except Exception as e_idx:
+                logger.warning(f"Could not update index for {actual_saved_path}: {e_idx}")
 
         if not saved:
             # provide as download

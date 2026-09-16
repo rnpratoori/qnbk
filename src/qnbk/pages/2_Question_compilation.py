@@ -9,13 +9,13 @@ import streamlit as st
 from loguru import logger
 
 from qnbk import DEFAULT_LATEX_EXPORT_DIR, DEFAULT_QUESTIONS_DIR, DEFAULT_TEMPLATE_DIR, DEFAULT_TEMPLATE_NAME
+from qnbk.question_index import load_indexed_questions, rebuild_index, upsert_question
 from qnbk.utils import (
-    read_question_file,
-    write_md_file,
-    render_chemistry_preview,
     escape_latex,
     md_to_latex_minimal,
     question_to_latex,
+    render_chemistry_preview,
+    write_md_file,
 )
 
 # ---------------------------
@@ -28,24 +28,16 @@ TEMPLATE_NAME = DEFAULT_TEMPLATE_NAME
 OUTPUT_DIR.mkdir(exist_ok=True)
 PDF_ENGINE = "pdflatex"  # change if you prefer xelatex or lualatex
 
-# Extract options in the form OptionA: text or OptionA - text or OptionA text
-
 
 # ---------------------------
 # Utilities
 # ---------------------------
 
 
-def load_all_questions(qdir: Path) -> list[dict]:
-    """Load all question files from the given directory and subdirectories."""
-    files = sorted(qdir.rglob("*.md"))
-    qs = []
-    for f in files:
-        try:
-            qs.append(read_question_file(f, qdir))
-        except Exception as e:
-            st.error(f"Error reading {f}: {e}")
-    return qs
+@st.cache_data(ttl=120, show_spinner="Loading questions...")
+def load_all_questions(qdir: str) -> list[dict]:
+    """Load questions from SQLite index with automatic filesystem rebuild fallback."""
+    return load_indexed_questions(qdir)
 
 
 def generate_difficulty_note(questions: list[dict]) -> str:
@@ -65,7 +57,7 @@ def generate_difficulty_note(questions: list[dict]) -> str:
         grp_list = list(grp)
         start_idx = grp_list[0][0]
         end_idx = grp_list[-1][0]
-        
+
         diff_lower = diff.lower()
         if diff_lower == "hard":
             diff_display = "difficult"
@@ -73,13 +65,11 @@ def generate_difficulty_note(questions: list[dict]) -> str:
             diff_display = diff_lower
 
         if idx_range == 0:
-            # First range has the prefix "question" or "questions"
             if start_idx == end_idx:
                 ranges.append(f"question {start_idx} is {diff_display}")
             else:
                 ranges.append(f"questions {start_idx}-{end_idx} are {diff_display}")
         else:
-            # Subsequent ranges do not repeat "questions" prefix
             if start_idx == end_idx:
                 ranges.append(f"{start_idx} is {diff_display}")
             else:
@@ -90,7 +80,6 @@ def generate_difficulty_note(questions: list[dict]) -> str:
 
     sentence = ", ".join(ranges) + "."
     sentence = sentence[0].upper() + sentence[1:]
-
     return f"\\noindent \\textit{{Note: {sentence}}}\\par\\medskip\n"
 
 
@@ -104,17 +93,7 @@ def render_latex_template_simple(
     answer_block: str | None = None,
     difficulty_top: str = "",
 ) -> str:
-    """Render into the latex template
-
-    :param template_path:
-    :param title:
-    :param date_str:
-    :param questions_tex:
-    :param show_solutions:
-    :param answer_block:
-    :param difficulty_top:
-    :return:
-    """
+    """Render into the latex template."""
     tpl = template_path.read_text(encoding="utf-8")
 
     show_solutions_line = r"\showsolutiontrue" if show_solutions else r"\showsolutionfalse"
@@ -124,10 +103,10 @@ def render_latex_template_simple(
     out = out.replace("<<<DATE>>>", escape_latex(date_str))
     out = out.replace("<<<QUESTIONS_BLOCK>>>", questions_tex)
     out = out.replace("<<<SOLUTIONS_BLOCK>>>", solutions_tex)
-    out = out.replace("<<<ANSWER_KEY_BLOCK>>>", answer_block)
+    out = out.replace("<<<ANSWER_KEY_BLOCK>>>", answer_block or "")
     out = out.replace("<<<DIFFICULTY_TOP_BLOCK>>>", difficulty_top)
 
-    return out  # noqa: RET504
+    return out
 
 
 def compile_latex(tex_path: Path, workdir: Path) -> tuple[bool, Path | Exception]:
@@ -149,14 +128,26 @@ def compile_latex(tex_path: Path, workdir: Path) -> tuple[bool, Path | Exception
 st.set_page_config(page_title="Question Bank", layout="wide")
 st.title("Question Extractor")
 
-QUESTIONS_DIR = st.text_input("Questions directory (relative to project root)", value=str(QUESTIONS_DIR))
-QUESTIONS_DIR = Path(QUESTIONS_DIR)
+dir_col, refresh_col, rebuild_col = st.columns([7, 1, 1], vertical_alignment="bottom")
+with dir_col:
+    QUESTIONS_DIR = st.text_input("Questions directory (relative to project root)", value=str(QUESTIONS_DIR))
+    QUESTIONS_DIR = Path(QUESTIONS_DIR)
+with refresh_col:
+    if st.button("🔄", help="Refresh question list (clears cache)", use_container_width=True):
+        load_all_questions.clear()
+        st.rerun()
+with rebuild_col:
+    if st.button("🛠️", help="Rebuild SQLite question index from files", use_container_width=True):
+        count = rebuild_index(QUESTIONS_DIR)
+        load_all_questions.clear()
+        st.success(f"Indexed {count} questions!")
+        st.rerun()
 
 if not QUESTIONS_DIR.exists():
     st.error(f"Questions directory {QUESTIONS_DIR} not found. Create it and add .md files.")
     st.stop()
 
-questions = load_all_questions(QUESTIONS_DIR)
+questions = load_all_questions(str(QUESTIONS_DIR))
 
 # Build filters and sidebar
 with st.sidebar:
@@ -177,14 +168,14 @@ with st.sidebar:
         "Question Type:",
         options=["All", "Objective (with options)", "Subjective (no options)"],
         index=0,
-        help="Filter by objective (has options) or subjective (no options) questions."
+        help="Filter by objective (has options) or subjective (no options) questions.",
     )
 
     usage_filter_action = st.radio(
         "Usage Date Filter:",
         options=["All questions", "Hide recently used", "Show only recently used"],
         index=0,
-        help="Filter questions based on their 'last_used' date."
+        help="Filter questions based on their 'last_used' date.",
     )
 
     cutoff_date = None
@@ -192,7 +183,7 @@ with st.sidebar:
         date_preset = st.selectbox(
             "Select Time Window:",
             options=["1 Month", "3 Months", "1 Year", "Custom Date..."],
-            index=0
+            index=0,
         )
         current_utc_date = datetime.datetime.now(datetime.timezone.utc).date()
         if date_preset == "1 Month":
@@ -207,12 +198,12 @@ with st.sidebar:
     solutions_inline = st.checkbox(
         "Show solutions immediately after each question (options will be hidden)",
         value=False,
-        help="Only questions with solutions compile. Options are hidden and solutions placed below questions."
+        help="Only questions with solutions compile. Options are hidden and solutions placed below questions.",
     )
     convert_to_subjective = st.checkbox(
         "Convert objective questions to subjective (hide options)",
         value=False,
-        help="If checked, objective questions (MCQs) are converted to subjective ones by hiding their options. The answer key will show the option value instead of the letter."
+        help="If checked, objective questions (MCQs) are converted to subjective ones by hiding their options. The answer key will show the option value instead of the letter.",
     )
     include_solutions = st.checkbox(
         "Include detailed solutions in compiled PDF",
@@ -288,25 +279,74 @@ for q in class_filtered_questions:
         elif usage_filter_action == "Show only recently used" and not is_recent:
             continue
     filtered.append(q)
+
 st.markdown(f"**Found {len(filtered)} questions** matching filters.")
 title = st.text_input("Title for the worksheet (appears in PDF header)", value="Questions")
 
-# Bulk selection controls
-if len(filtered) > 0:
-    col_sel1, col_sel2, _ = st.columns([2.5, 2.5, 7], gap="small")
-    with col_sel1:
-        if st.button("Select all filtered", use_container_width=True):
-            for q in filtered:
-                st.session_state[f"sel_{q['relpath']}"] = True
-            st.rerun()
-    with col_sel2:
-        if st.button("Deselect all filtered", use_container_width=True):
-            for q in filtered:
-                st.session_state[f"sel_{q['relpath']}"] = False
-            st.rerun()
+# Batch selection tracking via single set in session_state
+if "selected_questions" not in st.session_state:
+    st.session_state.selected_questions = set()
 
-# Present questions with selection checkboxes (show only question text in list)
-selected_indices = []
+
+def toggle_selection(rpath: str) -> None:
+    if st.session_state.get(f"cb_{rpath}", False):
+        st.session_state.selected_questions.add(rpath)
+    else:
+        st.session_state.selected_questions.discard(rpath)
+
+
+def select_all_filtered() -> None:
+    for q in filtered:
+        r = q["relpath"]
+        st.session_state.selected_questions.add(r)
+        st.session_state[f"cb_{r}"] = True
+
+
+def deselect_all_filtered() -> None:
+    for q in filtered:
+        r = q["relpath"]
+        st.session_state.selected_questions.discard(r)
+        st.session_state[f"cb_{r}"] = False
+
+
+def clear_all_selections() -> None:
+    for r in list(st.session_state.selected_questions):
+        st.session_state[f"cb_{r}"] = False
+    st.session_state.selected_questions.clear()
+
+
+# Bulk selection controls
+if len(filtered) > 0 or len(st.session_state.selected_questions) > 0:
+    col_sel1, col_sel2, col_sel3, _ = st.columns([2.5, 2.5, 2.5, 4.5], gap="small")
+    with col_sel1:
+        st.button("Select all filtered", on_click=select_all_filtered, use_container_width=True)
+    with col_sel2:
+        st.button("Deselect all filtered", on_click=deselect_all_filtered, use_container_width=True)
+    with col_sel3:
+        if len(st.session_state.selected_questions) > 0:
+            st.button("Clear all selections", on_click=clear_all_selections, use_container_width=True)
+
+# --- Pagination ---
+PAGE_SIZE = 50
+total_pages = max(1, (len(filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
+
+pag_col1, pag_col2, pag_col3 = st.columns([2, 6, 2], gap="small")
+with pag_col1:
+    current_page = st.number_input(
+        "Page",
+        min_value=1,
+        max_value=total_pages,
+        value=1,
+        label_visibility="collapsed",
+    )
+with pag_col2:
+    start_idx = (current_page - 1) * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, len(filtered))
+    st.caption(f"Showing {start_idx + 1}–{end_idx} of {len(filtered)} questions  •  Page {current_page}/{total_pages}")
+
+page_slice = filtered[start_idx:end_idx]
+
+# Present questions with selection checkboxes
 cols = st.columns([1, 8, 3], gap="small", vertical_alignment="center")
 with cols[0]:
     st.write("Select")
@@ -315,13 +355,22 @@ with cols[1]:
 with cols[2]:
     st.write("Meta")
 
-for idx, q in enumerate(filtered):
-    checkbox_key = f"sel_{q['relpath']}"
+for q in page_slice:
+    relpath = q["relpath"]
+    is_selected = relpath in st.session_state.selected_questions
+    if f"cb_{relpath}" not in st.session_state:
+        st.session_state[f"cb_{relpath}"] = is_selected
+
     row_cols = st.columns([1, 8, 3], gap="small", vertical_alignment="center")
     with row_cols[0]:
-        sel = st.checkbox(f"Select {q['filename']}", key=checkbox_key, label_visibility="collapsed")
-        if sel:
-            selected_indices.append(idx)
+        st.checkbox(
+            f"Select {q['filename']}",
+            key=f"cb_{relpath}",
+            on_change=toggle_selection,
+            args=(relpath,),
+            label_visibility="collapsed",
+        )
+
     with row_cols[1]:
         preview_md = q["question_text"].strip()
         st.markdown(preview_md, unsafe_allow_html=True)
@@ -333,18 +382,25 @@ for idx, q in enumerate(filtered):
                     st.markdown("**Solution:**")
                     st.markdown(q["solution"])
             with tab2:
-                full_content_md = q["question_text"] + "\n\n"
-                options = q.get("options", {}) or {}
-                non_empty_opts = {k: v for k, v in options.items() if v.strip()}
-                if non_empty_opts:
-                    full_content_md += "#### Options\n"
-                    for o in ["A", "B", "C", "D"]:
-                        opt_val = options.get(o, "")
-                        if opt_val.strip():
-                            full_content_md += f"* **Option {o}**: {opt_val}  \n"
-                if q.get("solution"):
-                    full_content_md += f"\n\n#### Solution\n{q['solution']}"
-                render_chemistry_preview(full_content_md, height=300)
+                chem_render_key = f"chem_render_{relpath}"
+                if st.session_state.get(chem_render_key, False):
+                    full_content_md = q["question_text"] + "\n\n"
+                    options = q.get("options", {}) or {}
+                    non_empty_opts = {k: v for k, v in options.items() if v.strip()}
+                    if non_empty_opts:
+                        full_content_md += "#### Options\n"
+                        for o in ["A", "B", "C", "D"]:
+                            opt_val = options.get(o, "")
+                            if opt_val.strip():
+                                full_content_md += f"* **Option {o}**: {opt_val}  \n"
+                    if q.get("solution"):
+                        full_content_md += f"\n\n#### Solution\n{q['solution']}"
+                    render_chemistry_preview(full_content_md, height=300)
+                else:
+                    st.caption("Chemistry preview renders MathJax and chemical structures.")
+                    if st.button("🧪 Render Chemistry Preview", key=f"btn_chem_{relpath}"):
+                        st.session_state[chem_render_key] = True
+                        st.rerun()
 
     with row_cols[2]:
         st.write(f"Diff: {q['meta'].get('difficulty')}")
@@ -354,7 +410,7 @@ for idx, q in enumerate(filtered):
         answer_raw = str(answer_val).strip() if answer_val is not None else ""
         possible_letters = [x.strip().upper() for x in answer_raw.split(",") if x.strip()]
         is_mcq_option = len(possible_letters) > 0 and all(x in ["A", "B", "C", "D"] for x in possible_letters)
-        
+
         if is_mcq_option:
             ans_display = ",".join(possible_letters)
             st.write(f"Answer: **{ans_display}**")
@@ -362,8 +418,8 @@ for idx, q in enumerate(filtered):
             st.write(f"Answer: {answer_raw}")
         st.write(f"Path: {q.get('relpath', '-')}")
 
-# Build list of chosen question objects
-chosen = [filtered[i] for i in selected_indices]
+# Build list of chosen question objects matching the filtered set and selected state
+chosen = [q for q in filtered if q["relpath"] in st.session_state.selected_questions]
 
 if sort_by_difficulty:
     difficulty_order = {"Easy": 0, "Medium": 1, "Hard": 2}
@@ -383,7 +439,7 @@ else:
 
         question_fragments = []
         solution_fragments = []
-        for q in chosen:
+        for q_id, q in enumerate(chosen):
             # update the file of `q` if the checkbox is checked
             if update_last_used:
                 q["meta"]["last_used"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -398,9 +454,14 @@ else:
                     },
                 }
                 logger.info(
-                     f"Updating last_used for {q['filename']} to {q['meta']['last_used']}; {qdict['body']['options']}"
+                    f"Updating last_used for {q['filename']} to {q['meta']['last_used']}; {qdict['body']['options']}"
                 )
                 write_md_file(qdict, q["path"])
+                try:
+                    upsert_question(qdict, q["path"], QUESTIONS_DIR)
+                except Exception as e_idx:
+                    logger.warning(f"Could not update index for {q['path']}: {e_idx}")
+
             q["options"] = q.get("options", {})
             include_opts = (not solutions_inline) and (not convert_to_subjective)
             question, solution = question_to_latex(q, include_options=include_opts)
@@ -414,7 +475,7 @@ else:
                 if solution:
                     solution_fragments.append(f"\\noindent \\textbf{{{q_id + 1})}} \\quad {solution}\\par\\bigskip\n")
 
-        # wrap in top-level enumerate in the template; template expects items inside an enumerate
+        # wrap in top-level enumerate in the template
         answer_block = ""
         if include_answer_key:
             answer_key_rows = []
@@ -423,10 +484,9 @@ else:
                 answer_raw = str(answer_val).strip() if answer_val is not None else ""
                 possible_letters = [x.strip().upper() for x in answer_raw.split(",") if x.strip()]
                 is_mcq_option = len(possible_letters) > 0 and all(x in ["A", "B", "C", "D"] for x in possible_letters)
-                
+
                 if is_mcq_option:
                     if convert_to_subjective:
-                        # Convert option letters to their actual values
                         values = []
                         for letter in possible_letters:
                             val_raw = q.get("options", {}).get(letter, "")
@@ -440,11 +500,19 @@ else:
                 else:
                     ans_tex = md_to_latex_minimal(answer_raw)
                     display_escaped = escape_latex(ans_tex)
-                
+
                 answer_key_rows.append(f"\\textbf{{{i})}} {display_escaped}")
-            
+
             answers_inline = " \\quad ".join(answer_key_rows)
-            answer_block = r"\bigskip" + "\n" + r"\noindent \textbf{Answer Key:}\par\medskip" + "\n" + r"\noindent " + answers_inline + "\n"
+            answer_block = (
+                r"\bigskip"
+                + "\n"
+                + r"\noindent \textbf{Answer Key:}\par\medskip"
+                + "\n"
+                + r"\noindent "
+                + answers_inline
+                + "\n"
+            )
 
         template_path = TEMPLATE_DIR / TEMPLATE_NAME
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%B %d, %Y")
