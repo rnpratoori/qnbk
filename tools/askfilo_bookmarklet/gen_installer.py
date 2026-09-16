@@ -102,15 +102,17 @@ html = r"""<!DOCTYPE html>
   <div class="what">
     <h3>What gets extracted automatically (no AI)</h3>
     <ul>
-      <li><span class="tag">topic</span> &nbsp;<span>from breadcrumb trail (e.g. "Combinations")</span></li>
-      <li><span class="tag">class</span> &nbsp;<span>from JSON-LD structured data (e.g. "XI")</span></li>
-      <li><span class="tag">difficulty</span> &nbsp;<span>from page DOM (Easy / Medium / Hard)</span></li>
-      <li><span class="tag">prev_year</span> &nbsp;<span>from page DOM (e.g. "NEET 2020")</span></li>
+      <li><span class="tag">topic</span> &nbsp;<span>from page metadata / breadcrumb trail</span></li>
+      <li><span class="tag">class</span> &nbsp;<span>from question metadata (e.g. "XI")</span></li>
+      <li><span class="tag">difficulty</span> &nbsp;<span>from page metadata (Easy / Medium / Hard)</span></li>
+      <li><span class="tag">answer</span> &nbsp;<span>mapped answer key letter (A, B, C, or D)</span></li>
+      <li><span class="tag">prev_year</span> &nbsp;<span>from exam metadata (e.g. "NEET 2020")</span></li>
       <li><span class="tag">source</span> &nbsp;<span>current page URL</span></li>
-      <li><span class="tag">question text</span> &nbsp;<span>from JSON-LD (text-based questions)</span></li>
-      <li><span class="tag">solution</span> &nbsp;<span>from JSON-LD acceptedAnswer.text</span></li>
+      <li><span class="tag">question text</span> &nbsp;<span>LaTeX / clean question statement</span></li>
+      <li><span class="tag">OptionA - OptionD</span> &nbsp;<span>Text options extracted directly (image options stubbed)</span></li>
+      <li><span class="tag">solution</span> &nbsp;<span>LaTeX / step-by-step solution text</span></li>
     </ul>
-    <p class="note">&#9888; Options are left as <code># TODO</code> stubs &mdash; fill them in manually from the source page.</p>
+    <p class="note">&#9888; For image-based options/structures, fill them in manually or with LaTeX/<code>\chemfig</code>.</p>
   </div>
 </div>
 </body>

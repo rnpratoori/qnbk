@@ -1,8 +1,8 @@
 # AskFilo Question Extractor Bookmarklet
 
-A browser bookmarklet to extract question metadata, problem statement, and solution from [askfilo.com](https://askfilo.com) directly into the `qnbk` markdown format.
+A browser bookmarklet to extract question metadata, problem statement, options, answer key, and solution from [askfilo.com](https://askfilo.com) directly into the `qnbk` markdown format.
 
-No external servers, extensions, or AI APIs are needed—it runs client-side in the browser using the page's structured data (JSON-LD) and DOM elements.
+No external servers, extensions, or AI APIs are needed—it runs client-side in the browser using the page's Next.js application data (`__NEXT_DATA__`), structured data (JSON-LD), and DOM elements.
 
 ---
 
@@ -29,9 +29,7 @@ No external servers, extensions, or AI APIs are needed—it runs client-side in 
 1. Navigate to any question page on **askfilo.com** in your browser.
 2. Click the **📋 qnbk Extract** bookmark in your bookmarks bar.
 3. A popup window will open displaying the pre-filled Markdown stub.
-4. Proofread and complete the remaining fields:
-   - Add/verify `answer:` (e.g. `A`, `B`, `C`, or `D`)
-   - Fill in option details (`OptionA` - `OptionD`), converting any chemical structures to LaTeX/`\chemfig` or text if needed.
+4. If options contain complex chemical structures or diagrams that are image-based, convert them to LaTeX/`\chemfig` or text.
 5. Click **Copy to Clipboard**.
 6. Paste the markdown into your question bank under `questions_output/Class-<Level>/<Topic>/q_XXXXX.md`.
 
@@ -41,14 +39,15 @@ No external servers, extensions, or AI APIs are needed—it runs client-side in 
 
 | Field | Source | Example Output |
 | :--- | :--- | :--- |
-| **`topic`** | Page breadcrumbs trail | `Permutations and Combinations` |
-| **`class`** | JSON-LD `educationalLevel` | `XI` |
-| **`difficulty`** | DOM difficulty badge | `Easy` |
-| **`prev_year`** | DOM exam metadata | `NEET 2020` |
+| **`topic`** | Page metadata / Breadcrumbs | `Chemical Bonding and Molecular Structure` |
+| **`class`** | Page metadata / JSON-LD | `XI` |
+| **`difficulty`** | Page metadata / DOM badge | `Easy` |
+| **`answer`** | Next.js data (`qdd.answer`) | `D` (mapped from 0-3 / A-D) |
+| **`prev_year`** | Exam metadata (`qdd.exams`) | `NEET 2020` |
 | **`source`** | Page URL (`window.location.href`) | `https://askfilo.com/...` |
-| **`question text`**| JSON-LD `mainEntity.name` / `.text` | LaTeX / text formatted equation |
-| **`solution`** | JSON-LD `acceptedAnswer.text` | Step-by-step solution text |
-| **`OptionA` - `OptionD`** | Stubs (`# TODO`) | Left for manual entry |
+| **`question text`**| Next.js LaTeX / JSON-LD | LaTeX formatted question statement |
+| **`OptionA` - `OptionD`** | `optionsLatex` / DOM items | Full text/LaTeX options (image options stubbed) |
+| **`solution`** | `solutionLatex` / JSON-LD | Step-by-step solution text |
 
 ---
 
