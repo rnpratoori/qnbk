@@ -1,15 +1,22 @@
-"""Manage questions and export to latex/PDF."""
+"""Manage questions and export to LaTeX/PDF with modern UI and preview dialogs."""
 
 import datetime
-import re
-import subprocess
+from itertools import groupby
 from pathlib import Path
+import subprocess
 
-import streamlit as st
 from loguru import logger
+import streamlit as st
 
 from qnbk import DEFAULT_LATEX_EXPORT_DIR, DEFAULT_QUESTIONS_DIR, DEFAULT_TEMPLATE_DIR, DEFAULT_TEMPLATE_NAME
 from qnbk.question_index import load_indexed_questions, rebuild_index, upsert_question
+from qnbk.styles import (
+    get_answer_badge_html,
+    get_class_badge_html,
+    get_difficulty_badge_html,
+    get_topic_badge_html,
+    inject_custom_css,
+)
 from qnbk.utils import (
     escape_latex,
     md_to_latex_minimal,
@@ -19,21 +26,27 @@ from qnbk.utils import (
 )
 
 # ---------------------------
-# Configuration
+# Configuration & Setup
 # ---------------------------
 QUESTIONS_DIR = DEFAULT_QUESTIONS_DIR
 OUTPUT_DIR = DEFAULT_LATEX_EXPORT_DIR
 TEMPLATE_DIR = DEFAULT_TEMPLATE_DIR
 TEMPLATE_NAME = DEFAULT_TEMPLATE_NAME
 OUTPUT_DIR.mkdir(exist_ok=True)
-PDF_ENGINE = "pdflatex"  # change if you prefer xelatex or lualatex
+PDF_ENGINE = "pdflatex"
+
+st.set_page_config(
+    page_title="Worksheet Compiler — Question Bank",
+    page_icon="📦",
+    layout="wide",
+)
+
+inject_custom_css()
 
 
 # ---------------------------
-# Utilities
+# Utilities & Data Loading
 # ---------------------------
-
-
 @st.cache_data(ttl=120, show_spinner="Loading questions...")
 def load_all_questions(qdir: str) -> list[dict]:
     """Load questions from SQLite index with automatic filesystem rebuild fallback."""
@@ -44,8 +57,6 @@ def generate_difficulty_note(questions: list[dict]) -> str:
     """Generate a LaTeX sentence describing the contiguous difficulty ranges of the questions."""
     if not questions:
         return ""
-
-    from itertools import groupby
 
     items = []
     for idx, q in enumerate(questions, 1):
@@ -59,10 +70,7 @@ def generate_difficulty_note(questions: list[dict]) -> str:
         end_idx = grp_list[-1][0]
 
         diff_lower = diff.lower()
-        if diff_lower == "hard":
-            diff_display = "difficult"
-        else:
-            diff_display = diff_lower
+        diff_display = "difficult" if diff_lower == "hard" else diff_lower
 
         if idx_range == 0:
             if start_idx == end_idx:
@@ -93,9 +101,8 @@ def render_latex_template_simple(
     answer_block: str | None = None,
     difficulty_top: str = "",
 ) -> str:
-    """Render into the latex template."""
+    """Render content into LaTeX template."""
     tpl = template_path.read_text(encoding="utf-8")
-
     show_solutions_line = r"\showsolutiontrue" if show_solutions else r"\showsolutionfalse"
 
     out = tpl.replace("<<<SHOW_SOLUTIONS_FLAG>>>", show_solutions_line)
@@ -105,12 +112,11 @@ def render_latex_template_simple(
     out = out.replace("<<<SOLUTIONS_BLOCK>>>", solutions_tex)
     out = out.replace("<<<ANSWER_KEY_BLOCK>>>", answer_block or "")
     out = out.replace("<<<DIFFICULTY_TOP_BLOCK>>>", difficulty_top)
-
     return out
 
 
 def compile_latex(tex_path: Path, workdir: Path) -> tuple[bool, Path | Exception]:
-    """Compile the given .tex file to PDF using pdflatex."""
+    """Compile LaTeX file to PDF using pdflatex (two passes for references)."""
     cmd = [PDF_ENGINE, "-interaction=nonstopmode", tex_path.name]
     try:
         subprocess.run(cmd, cwd=workdir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -123,65 +129,159 @@ def compile_latex(tex_path: Path, workdir: Path) -> tuple[bool, Path | Exception
 
 
 # ---------------------------
-# Streamlit UI
+# Modal Dialog for Question Details
 # ---------------------------
-st.set_page_config(page_title="Question Bank", layout="wide")
-st.title("Question Extractor")
+@st.dialog("Question Details & Preview", width="large")
+def show_question_dialog(q: dict) -> None:
+    """Displays a modal dialog with full rendered preview, math/chemistry, and metadata."""
+    meta = q.get("meta", {})
+    diff_badge = get_difficulty_badge_html(meta.get("difficulty"))
+    class_badge = get_class_badge_html(meta.get("class"))
+    topic_badge = get_topic_badge_html(meta.get("topic"))
+    ans_badge = get_answer_badge_html(meta.get("answer"))
 
-dir_col, refresh_col, rebuild_col = st.columns([7, 1, 1], vertical_alignment="bottom")
+    st.markdown(
+        f"""
+        <div style="margin-bottom: 1.2rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            {class_badge} {topic_badge} {diff_badge} {ans_badge}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    t1, t2, t3 = st.tabs(["📝 Standard Preview", "🧪 Chemistry & MathJax", "📄 File Info & Raw"])
+
+    with t1:
+        st.markdown("#### Question")
+        st.markdown(q.get("question_text", "").strip(), unsafe_allow_html=True)
+
+        options = q.get("options") or {}
+        non_empty_opts = {k: v for k, v in options.items() if v and v.strip()}
+        if non_empty_opts:
+            st.markdown("#### Options")
+            correct_ans_raw = str(meta.get("answer") or "").upper()
+            correct_letters = [x.strip() for x in correct_ans_raw.split(",") if x.strip()]
+            for letter in ["A", "B", "C", "D"]:
+                val = options.get(letter, "")
+                if val.strip():
+                    is_correct = letter in correct_letters
+                    if is_correct:
+                        st.markdown(f"**✓ Option {letter}**: {val} *(Correct Answer)*")
+                    else:
+                        st.markdown(f"• **Option {letter}**: {val}")
+
+        if q.get("solution"):
+            st.markdown("#### Solution")
+            st.markdown(q["solution"], unsafe_allow_html=True)
+
+    with t2:
+        full_content_md = q.get("question_text", "") + "\n\n"
+        if non_empty_opts:
+            full_content_md += "#### Options\n"
+            for o in ["A", "B", "C", "D"]:
+                opt_val = options.get(o, "")
+                if opt_val.strip():
+                    full_content_md += f"* **Option {o}**: {opt_val}  \n"
+        if q.get("solution"):
+            full_content_md += f"\n\n#### Solution\n{q['solution']}"
+        render_chemistry_preview(full_content_md, height=360)
+
+    with t3:
+        st.markdown(f"**File Path:** `{q.get('relpath', '-')}`")
+        if meta.get("source"):
+            st.markdown(f"**Source:** {meta.get('source')}")
+        if meta.get("prev_year"):
+            st.markdown(f"**Previous Years:** {meta.get('prev_year')}")
+        if meta.get("last_used"):
+            st.markdown(f"**Last Used:** {meta.get('last_used')}")
+
+        st.markdown("#### Raw File Content")
+        st.code(q.get("body", ""), language="markdown")
+
+
+# ---------------------------
+# Main App Header & Directory Controls
+# ---------------------------
+st.title("Worksheet Compiler & PDF Generator")
+st.caption("Filter questions from your indexed repository, select items, and export formatted worksheets.")
+
+dir_col, refresh_col, rebuild_col = st.columns([7, 1.2, 1.2], vertical_alignment="bottom")
 with dir_col:
-    QUESTIONS_DIR = st.text_input("Questions directory (relative to project root)", value=str(QUESTIONS_DIR))
-    QUESTIONS_DIR = Path(QUESTIONS_DIR)
+    QUESTIONS_DIR = Path(
+        st.text_input("Questions directory (relative to project root)", value=str(QUESTIONS_DIR))
+    )
 with refresh_col:
-    if st.button("🔄", help="Refresh question list (clears cache)", use_container_width=True):
+    if st.button("🔄 Refresh", help="Reload question cache", use_container_width=True):
         load_all_questions.clear()
         st.rerun()
 with rebuild_col:
-    if st.button("🛠️", help="Rebuild SQLite question index from files", use_container_width=True):
+    if st.button("🛠️ Reindex", help="Rebuild SQLite index from disk files", use_container_width=True):
         count = rebuild_index(QUESTIONS_DIR)
         load_all_questions.clear()
         st.success(f"Indexed {count} questions!")
         st.rerun()
 
 if not QUESTIONS_DIR.exists():
-    st.error(f"Questions directory {QUESTIONS_DIR} not found. Create it and add .md files.")
+    st.error(f"Questions directory '{QUESTIONS_DIR}' not found. Please ensure it exists.")
     st.stop()
 
 questions = load_all_questions(str(QUESTIONS_DIR))
 
-# Build filters and sidebar
+# ---------------------------
+# Sidebar Filters & Configuration
+# ---------------------------
 with st.sidebar:
-    st.header("Filters & Export options")
-    all_classes = sorted({q["meta"].get("class") or "None" for q in questions})
-    selected_classes = st.multiselect("Class(es)", all_classes, default=all_classes)
+    st.header("🎯 Filter Question Bank")
 
-    # Filter questions to only those whose class is in the selected classes
+    all_classes = sorted({q["meta"].get("class") or "None" for q in questions})
+    # Use modern st.pills for class selection
+    selected_classes = st.pills(
+        "Class",
+        all_classes,
+        default=all_classes,
+        selection_mode="multi",
+        help="Select classes to filter questions",
+    )
+    if not selected_classes:
+        selected_classes = all_classes
+
     class_filtered_questions = [q for q in questions if (q["meta"].get("class") or "None") in selected_classes]
 
     all_topics = sorted({q["meta"].get("topic") or "Uncategorized" for q in class_filtered_questions})
     all_difficulties = sorted({q["meta"].get("difficulty") or "Unknown" for q in class_filtered_questions})
 
     selected_topics = st.multiselect("Topic(s)", all_topics, default=all_topics)
-    selected_difficulties = st.multiselect("Difficulty level(s)", all_difficulties, default=all_difficulties)
 
-    question_type_filter = st.radio(
-        "Question Type:",
-        options=["All", "Objective (with options)", "Subjective (no options)"],
-        index=0,
-        help="Filter by objective (has options) or subjective (no options) questions.",
+    # Use modern st.pills for difficulty selection
+    selected_difficulties = st.pills(
+        "Difficulty",
+        all_difficulties,
+        default=all_difficulties,
+        selection_mode="multi",
+    )
+    if not selected_difficulties:
+        selected_difficulties = all_difficulties
+
+    # Use modern st.segmented_control for Question Type
+    question_type_filter = st.segmented_control(
+        "Question Format",
+        options=["All", "Objective", "Subjective"],
+        default="All",
+        help="Filter by objective (MCQ) or subjective (open-response) questions.",
     )
 
-    usage_filter_action = st.radio(
-        "Usage Date Filter:",
-        options=["All questions", "Hide recently used", "Show only recently used"],
-        index=0,
-        help="Filter questions based on their 'last_used' date.",
+    # Use modern st.segmented_control for Usage Filter
+    usage_filter_action = st.segmented_control(
+        "Usage Filter",
+        options=["All", "Hide Recent", "Only Recent"],
+        default="All",
+        help="Filter questions based on their 'last_used' timestamp.",
     )
 
     cutoff_date = None
-    if usage_filter_action != "All questions":
+    if usage_filter_action != "All":
         date_preset = st.selectbox(
-            "Select Time Window:",
+            "Time Window",
             options=["1 Month", "3 Months", "1 Year", "Custom Date..."],
             index=0,
         )
@@ -193,74 +293,78 @@ with st.sidebar:
         elif date_preset == "1 Year":
             cutoff_date = current_utc_date - datetime.timedelta(days=365)
         elif date_preset == "Custom Date...":
-            cutoff_date = st.date_input("Select Cutoff Date:", value=current_utc_date)
+            cutoff_date = st.date_input("Cutoff Date", value=current_utc_date)
 
-    solutions_inline = st.checkbox(
-        "Show solutions immediately after each question (options will be hidden)",
-        value=False,
-        help="Only questions with solutions compile. Options are hidden and solutions placed below questions.",
-    )
-    convert_to_subjective = st.checkbox(
-        "Convert objective questions to subjective (hide options)",
-        value=False,
-        help="If checked, objective questions (MCQs) are converted to subjective ones by hiding their options. The answer key will show the option value instead of the letter.",
-    )
-    include_solutions = st.checkbox(
-        "Include detailed solutions in compiled PDF",
-        value=False,
-        disabled=solutions_inline,
-    )
-    include_answer_key = st.checkbox(
-        "Include answer key at the end",
-        value=False,
-        disabled=solutions_inline,
-    )
+    st.write("---")
+    st.header("⚙️ Worksheet Output Settings")
 
-    compile_pdf = st.checkbox("Compile to PDF", value=True)
-
+    # 1. Update last used
     update_last_used = st.checkbox(
-        "Update last used",
+        "Update 'last_used' date in files on export",
         value=False,
-        help="If checked, updates the 'last_used' field in each of the question metadata to current date (YYYY-MM-DD)",
+        help="Marks exported questions with today's date in their YAML metadata.",
     )
 
+    # 2. Sort questions (automatically includes difficulty note at top)
     sort_by_difficulty = st.checkbox(
-        "Sort questions by difficulty (Easy -> Medium -> Hard)",
+        "Sort questions by difficulty (Easy → Medium → Hard)",
         value=False,
-        help="If checked, sorts the chosen questions so Easy ones appear first, then Medium, and Hard last.",
+        help="Sorts questions and automatically includes difficulty range note at the top of the worksheet.",
+    )
+    show_difficulty_note = sort_by_difficulty
+
+    # 3. Append answer key
+    include_answer_key = st.checkbox(
+        "Append answer key at the end",
+        value=False,
+        disabled=st.session_state.get("solutions_inline", False),
     )
 
-    show_difficulty_note = st.checkbox(
-        "Show difficulty range note (at top)",
+    # 4. Append detailed solutions
+    include_solutions = st.checkbox(
+        "Append detailed solutions section at end",
         value=False,
-        help="If checked, adds a note at the top of the worksheet showing the difficulty ranges of the questions.",
+        disabled=st.session_state.get("solutions_inline", False),
     )
+
+    # 5. Convert MCQs to subjective
+    convert_to_subjective = st.checkbox(
+        "Convert MCQs to subjective (hide options)",
+        value=False,
+        help="Hides MCQ options so students must write out full responses.",
+    )
+
+    # 6. Show solutions immediately
+    solutions_inline = st.checkbox(
+        "Show solutions immediately below questions",
+        value=False,
+        key="solutions_inline",
+        help="Options are hidden and solutions are placed immediately under each question.",
+    )
+
+    # Compile to PDF is always enabled
+    compile_pdf = True
 
     st.write("---")
-    st.write("Export destination:")
-    st.write(str(OUTPUT_DIR.resolve()))
-    st.write("---")
-    st.write(
-        f"Tip: put question files under `{QUESTIONS_DIR}` with YAML frontmatter: "
-        f"class, topic, difficulty, answer (solution goes in the body)."
-    )
+    st.caption(f"Export directory: `{OUTPUT_DIR.resolve()}`")
 
-# Filter questions
+# ---------------------------
+# Filter Question List
+# ---------------------------
 filtered = []
-
 for q in class_filtered_questions:
     if q["meta"].get("topic") not in selected_topics:
         continue
     if q["meta"].get("difficulty") not in selected_difficulties:
         continue
 
-    # Filter by question type (objective vs subjective)
     has_options = any(q.get("options", {}).values())
-    if question_type_filter == "Objective (with options)" and not has_options:
+    if question_type_filter == "Objective" and not has_options:
         continue
-    if question_type_filter == "Subjective (no options)" and has_options:
+    if question_type_filter == "Subjective" and has_options:
         continue
-    if usage_filter_action != "All questions" and cutoff_date is not None:
+
+    if usage_filter_action != "All" and cutoff_date is not None:
         last_used_val = q["meta"].get("last_used")
         last_used_date = None
         if last_used_val:
@@ -274,16 +378,16 @@ for q in class_filtered_questions:
                 except ValueError:
                     pass
         is_recent = last_used_date is not None and last_used_date >= cutoff_date
-        if usage_filter_action == "Hide recently used" and is_recent:
+        if usage_filter_action == "Hide Recent" and is_recent:
             continue
-        elif usage_filter_action == "Show only recently used" and not is_recent:
+        elif usage_filter_action == "Only Recent" and not is_recent:
             continue
+
     filtered.append(q)
 
-st.markdown(f"**Found {len(filtered)} questions** matching filters.")
-title = st.text_input("Title for the worksheet (appears in PDF header)", value="Questions")
-
-# Batch selection tracking via single set in session_state
+# ---------------------------
+# Selection State & Handlers
+# ---------------------------
 if "selected_questions" not in st.session_state:
     st.session_state.selected_questions = set()
 
@@ -315,22 +419,41 @@ def clear_all_selections() -> None:
     st.session_state.selected_questions.clear()
 
 
-# Bulk selection controls
-if len(filtered) > 0 or len(st.session_state.selected_questions) > 0:
-    col_sel1, col_sel2, col_sel3, _ = st.columns([2.5, 2.5, 2.5, 4.5], gap="small")
-    with col_sel1:
-        st.button("Select all filtered", on_click=select_all_filtered, use_container_width=True)
-    with col_sel2:
-        st.button("Deselect all filtered", on_click=deselect_all_filtered, use_container_width=True)
-    with col_sel3:
-        if len(st.session_state.selected_questions) > 0:
-            st.button("Clear all selections", on_click=clear_all_selections, use_container_width=True)
+# ---------------------------
+# Top Controls & Worksheet Header
+# ---------------------------
+top_col1, top_col2 = st.columns([6, 4], vertical_alignment="bottom")
+with top_col1:
+    title = st.text_input("Worksheet Title (appears on printed PDF header)", value="Practice Worksheet")
+with top_col2:
+    st.markdown(
+        f"""
+        <div style="text-align: right; padding-bottom: 0.5rem;">
+            <span class="badge badge-neutral" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+                <b>{len(st.session_state.selected_questions)}</b> selected &nbsp;|&nbsp; <b>{len(filtered)}</b> matching
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# --- Pagination ---
+# Bulk Action Buttons
+col_sel1, col_sel2, col_sel3, _ = st.columns([2, 2, 2, 4], gap="small")
+with col_sel1:
+    st.button("✓ Select All Filtered", on_click=select_all_filtered, use_container_width=True)
+with col_sel2:
+    st.button("✕ Deselect Filtered", on_click=deselect_all_filtered, use_container_width=True)
+with col_sel3:
+    if len(st.session_state.selected_questions) > 0:
+        st.button("🗑️ Clear All", on_click=clear_all_selections, use_container_width=True)
+
+# ---------------------------
+# Pagination
+# ---------------------------
 PAGE_SIZE = 50
 total_pages = max(1, (len(filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
 
-pag_col1, pag_col2, pag_col3 = st.columns([2, 6, 2], gap="small")
+pag_col1, pag_col2, pag_col3 = st.columns([2, 6, 2], gap="small", vertical_alignment="center")
 with pag_col1:
     current_page = st.number_input(
         "Page",
@@ -342,83 +465,68 @@ with pag_col1:
 with pag_col2:
     start_idx = (current_page - 1) * PAGE_SIZE
     end_idx = min(start_idx + PAGE_SIZE, len(filtered))
-    st.caption(f"Showing {start_idx + 1}–{end_idx} of {len(filtered)} questions  •  Page {current_page}/{total_pages}")
+    st.caption(f"Showing **{start_idx + 1}–{end_idx}** of **{len(filtered)}** questions • Page {current_page} of {total_pages}")
 
 page_slice = filtered[start_idx:end_idx]
 
-# Present questions with selection checkboxes
-cols = st.columns([1, 8, 3], gap="small", vertical_alignment="center")
-with cols[0]:
-    st.write("Select")
-with cols[1]:
-    st.write("Question (preview)")
-with cols[2]:
-    st.write("Meta")
+st.write("")
 
+# ---------------------------
+# Question Cards Grid
+# ---------------------------
 for q in page_slice:
     relpath = q["relpath"]
     is_selected = relpath in st.session_state.selected_questions
     if f"cb_{relpath}" not in st.session_state:
         st.session_state[f"cb_{relpath}"] = is_selected
 
-    row_cols = st.columns([1, 8, 3], gap="small", vertical_alignment="center")
-    with row_cols[0]:
-        st.checkbox(
-            f"Select {q['filename']}",
-            key=f"cb_{relpath}",
-            on_change=toggle_selection,
-            args=(relpath,),
-            label_visibility="collapsed",
-        )
+    meta = q.get("meta", {})
+    diff_badge = get_difficulty_badge_html(meta.get("difficulty"))
+    class_badge = get_class_badge_html(meta.get("class"))
+    topic_badge = get_topic_badge_html(meta.get("topic"))
+    ans_badge = get_answer_badge_html(meta.get("answer"))
 
-    with row_cols[1]:
-        preview_md = q["question_text"].strip()
-        st.markdown(preview_md, unsafe_allow_html=True)
-        with st.expander("Question details & preview"):
-            tab1, tab2 = st.tabs(["📝 Standard Preview", "🧪 Chemistry Preview"])
-            with tab1:
-                st.markdown(q["body"], unsafe_allow_html=True)
-                if q.get("solution"):
-                    st.markdown("**Solution:**")
-                    st.markdown(q["solution"])
-            with tab2:
-                chem_render_key = f"chem_render_{relpath}"
-                if st.session_state.get(chem_render_key, False):
-                    full_content_md = q["question_text"] + "\n\n"
-                    options = q.get("options", {}) or {}
-                    non_empty_opts = {k: v for k, v in options.items() if v.strip()}
-                    if non_empty_opts:
-                        full_content_md += "#### Options\n"
-                        for o in ["A", "B", "C", "D"]:
-                            opt_val = options.get(o, "")
-                            if opt_val.strip():
-                                full_content_md += f"* **Option {o}**: {opt_val}  \n"
-                    if q.get("solution"):
-                        full_content_md += f"\n\n#### Solution\n{q['solution']}"
-                    render_chemistry_preview(full_content_md, height=300)
-                else:
-                    st.caption("Chemistry preview renders MathJax and chemical structures.")
-                    if st.button("🧪 Render Chemistry Preview", key=f"btn_chem_{relpath}"):
-                        st.session_state[chem_render_key] = True
-                        st.rerun()
+    card_class = "q-card q-card-selected" if is_selected else "q-card"
 
-    with row_cols[2]:
-        st.write(f"Diff: {q['meta'].get('difficulty')}")
-        if q["meta"].get("source"):
-            st.write(f"Source: {q['meta'].get('source')}")
-        answer_val = q["meta"].get("answer")
-        answer_raw = str(answer_val).strip() if answer_val is not None else ""
-        possible_letters = [x.strip().upper() for x in answer_raw.split(",") if x.strip()]
-        is_mcq_option = len(possible_letters) > 0 and all(x in ["A", "B", "C", "D"] for x in possible_letters)
+    with st.container():
+        # Render clean question row
+        row_c1, row_c2, row_c3 = st.columns([0.6, 7.8, 1.6], gap="small", vertical_alignment="center")
 
-        if is_mcq_option:
-            ans_display = ",".join(possible_letters)
-            st.write(f"Answer: **{ans_display}**")
-        else:
-            st.write(f"Answer: {answer_raw}")
-        st.write(f"Path: {q.get('relpath', '-')}")
+        with row_c1:
+            st.checkbox(
+                f"Select {q['filename']}",
+                key=f"cb_{relpath}",
+                on_change=toggle_selection,
+                args=(relpath,),
+                label_visibility="collapsed",
+            )
 
-# Build list of chosen question objects matching the filtered set and selected state
+        with row_c2:
+            st.markdown(
+                f"""
+                <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; flex-wrap: wrap;">
+                    {class_badge} {topic_badge} {diff_badge} {ans_badge}
+                    <span class="meta-label">· {q.get('relpath', '')}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            # Question preview
+            preview_snippet = q["question_text"].strip()
+            if len(preview_snippet) > 280:
+                preview_snippet = preview_snippet[:280] + "..."
+            st.markdown(preview_snippet, unsafe_allow_html=True)
+
+        with row_c3:
+            if st.button("🔍 Inspect", key=f"btn_inspect_{relpath}", use_container_width=True):
+                show_question_dialog(q)
+
+        st.markdown("<hr style='margin: 0.4rem 0 0.85rem 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+
+
+# ---------------------------
+# Export & Compilation Section
+# ---------------------------
 chosen = [q for q in filtered if q["relpath"] in st.session_state.selected_questions]
 
 if sort_by_difficulty:
@@ -428,23 +536,36 @@ if sort_by_difficulty:
 if solutions_inline:
     chosen = [q for q in chosen if q.get("solution") and q["solution"].strip()]
 
+st.write("")
 st.write("---")
-st.markdown(f"**{len(chosen)} selected for export**")
-if len(chosen) == 0:
-    st.info("Select at least one question to enable export.")
-else:
-    if st.button("Export selected questions to LaTeX and PDF"):
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        tex_name = OUTPUT_DIR / f"Q_{timestamp}.tex"
+
+exp_col1, exp_col2 = st.columns([7, 3], vertical_alignment="center")
+with exp_col1:
+    st.markdown(f"### 📦 Export Ready: **{len(chosen)} questions selected**")
+    if len(chosen) == 0:
+        st.info("Select one or more questions from the list above to compile into a LaTeX/PDF worksheet.")
+
+with exp_col2:
+    export_clicked = st.button(
+        "🚀 Compile LaTeX & PDF Worksheet",
+        type="primary",
+        disabled=len(chosen) == 0,
+        use_container_width=True,
+    )
+
+if export_clicked and len(chosen) > 0:
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+    tex_name = OUTPUT_DIR / f"Q_{timestamp}.tex"
+
+    with st.status("Compiling LaTeX & PDF Worksheet...", expanded=True) as status_box:
+        st.write("📝 Formatting questions and solutions for LaTeX...")
 
         question_fragments = []
         solution_fragments = []
         for q_id, q in enumerate(chosen):
-            # update the file of `q` if the checkbox is checked
             if update_last_used:
                 q["meta"]["last_used"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
                 solution_text = q.get("solution", "")
-                # write back to file
                 qdict = {
                     "metadata": q.get("meta"),
                     "body": {
@@ -453,9 +574,6 @@ else:
                         "solution": (solution_text if solution_text and solution_text.strip() else None),
                     },
                 }
-                logger.info(
-                    f"Updating last_used for {q['filename']} to {q['meta']['last_used']}; {qdict['body']['options']}"
-                )
                 write_md_file(qdict, q["path"])
                 try:
                     upsert_question(qdict, q["path"], QUESTIONS_DIR)
@@ -465,7 +583,6 @@ else:
             q["options"] = q.get("options", {})
             include_opts = (not solutions_inline) and (not convert_to_subjective)
             question, solution = question_to_latex(q, include_options=include_opts)
-            # Add a source comment so users can track errors back to the MD file
             source_comment = f"% SOURCE: {q.get('relpath', 'Unknown')}\n"
             if solutions_inline:
                 sol_formatted = f"\n\n\\par\\medskip\\noindent\\textbf{{Solution:}} {solution}\n"
@@ -475,9 +592,10 @@ else:
                 if solution:
                     solution_fragments.append(f"\\noindent \\textbf{{{q_id + 1})}} \\quad {solution}\\par\\bigskip\n")
 
-        # wrap in top-level enumerate in the template
+        # Answer key generation
         answer_block = ""
         if include_answer_key:
+            st.write("🔑 Generating answer key block...")
             answer_key_rows = []
             for i, q in enumerate(chosen, start=1):
                 answer_val = q["meta"].get("answer")
@@ -530,19 +648,53 @@ else:
 
         tex_path = tex_name
         tex_path.write_text(tex_text, encoding="utf-8")
-        st.success(f"Wrote LaTeX file: {tex_path}")
-
-        with open(tex_path, "rb") as f:
-            st.download_button("Download .tex", data=f.read(), file_name=tex_path.name)
+        st.write(f"📄 LaTeX source written to `{tex_path.name}`")
 
         if compile_pdf:
-            st.info("Compiling to PDF (this runs pdflatex — must be installed on the server).")
-            with st.spinner("Running pdflatex..."):
-                ok, result = compile_latex(tex_path, tex_path.parent)
-                if ok:
-                    pdf_path = result
-                    st.success(f"Compiled PDF: {pdf_path}")
+            st.write(f"⚙️ Running `{PDF_ENGINE}` compiler...")
+            ok, result = compile_latex(tex_path, tex_path.parent)
+            if ok:
+                pdf_path = result
+                status_box.update(label="✅ Compilation Complete!", state="complete", expanded=False)
+                st.success(f"Worksheet successfully generated: **{pdf_path.name}**")
+
+                d_col1, d_col2 = st.columns(2)
+                with d_col1:
                     with open(pdf_path, "rb") as f:
-                        st.download_button("Download PDF", data=f.read(), file_name=pdf_path.name)
-                else:
-                    st.error(f"Compilation failed: {result}")
+                        st.download_button(
+                            "📥 Download PDF Worksheet",
+                            data=f.read(),
+                            file_name=pdf_path.name,
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                with d_col2:
+                    with open(tex_path, "rb") as f:
+                        st.download_button(
+                            "📄 Download LaTeX (.tex)",
+                            data=f.read(),
+                            file_name=tex_path.name,
+                            mime="text/plain",
+                            use_container_width=True,
+                        )
+            else:
+                status_box.update(label="❌ PDF Compilation Failed", state="error", expanded=True)
+                st.error(f"LaTeX engine failed with error: {result}")
+                with open(tex_path, "rb") as f:
+                    st.download_button(
+                        "📄 Download LaTeX (.tex) for debugging",
+                        data=f.read(),
+                        file_name=tex_path.name,
+                        mime="text/plain",
+                    )
+        else:
+            status_box.update(label="✅ LaTeX Generated!", state="complete", expanded=False)
+            st.success(f"LaTeX source ready: **{tex_path.name}**")
+            with open(tex_path, "rb") as f:
+                st.download_button(
+                    "📄 Download LaTeX (.tex)",
+                    data=f.read(),
+                    file_name=tex_path.name,
+                    mime="text/plain",
+                    use_container_width=True,
+                )

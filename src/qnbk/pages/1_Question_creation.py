@@ -1,38 +1,43 @@
-"""Create questions in a structured format (Markdown with YAML front matter) using a Streamlit interface."""
+"""Create questions in a structured format (Markdown with YAML front matter) using a modern Streamlit interface."""
 
 import json
 import os
 from pathlib import Path
 
-import streamlit as st
 from loguru import logger
+import streamlit as st
 
 from qnbk import DEFAULT_QUESTIONS_DIR
 from qnbk.question_index import upsert_question
-from qnbk.utils import write_md_file, render_chemistry_preview, chemistry_help_panel
+from qnbk.styles import inject_custom_css
+from qnbk.utils import chemistry_help_panel, render_chemistry_preview, write_md_file
 
 QUESTIONS_DIR = DEFAULT_QUESTIONS_DIR
 
+st.set_page_config(
+    page_title="Question Authoring Studio",
+    page_icon="📝",
+    layout="wide",
+)
+
+inject_custom_css()
+
 
 def ensure_output_dir(out_dir: Path) -> None:
-    """Ensure the output directory exists, creating it if necessary."""
+    """Ensure output directory exists."""
     os.makedirs(out_dir, exist_ok=True)
 
 
 def generate_id(directory: Path) -> str:
-    """Find the latest question number in the directory and generate a new ID by incrementing it.
-
-    If no questions exist, start with 001.
-    :param directory:
-    :return:
-    """
+    """Find the latest question number in directory and generate an incremented ID."""
     existing_ids = []
-    for file in directory.glob("q_*.md"):
-        try:
-            num_part = file.stem.split("_")[1]
-            existing_ids.append(int(num_part))
-        except (IndexError, ValueError):
-            continue
+    if directory.exists():
+        for file in directory.glob("q_*.md"):
+            try:
+                num_part = file.stem.split("_")[1]
+                existing_ids.append(int(num_part))
+            except (IndexError, ValueError):
+                continue
     new_id_num = max(existing_ids) + 1 if existing_ids else 1
     return f"{new_id_num:05d}"
 
@@ -49,7 +54,7 @@ def build_question_dict(
     correct_option: str | list[str] | None,
     extra_metadata: dict | None = None,
 ) -> dict:
-    """Build a structured dictionary for the question, separating metadata and body content."""
+    """Build structured question dictionary."""
     metadata = {
         "topic": topic,
         "class": class_num,
@@ -59,107 +64,134 @@ def build_question_dict(
         "source": source or "",
         "last_used": "",
     }
-    # include any extra metadata fields
     if extra_metadata:
         metadata.update(extra_metadata)
 
-    # Build body which contains question text, options, and the solution (moved here)
     body = {
         "question": question,
         "options": options,
         "solution": (solution_text if solution_text and solution_text.strip() else None),
     }
     logger.info(f"{options=}")
-
     return {"metadata": metadata, "body": body}
 
 
 def main() -> None:
-    """Enter here
+    """Render question authoring page."""
+    st.title("Question Authoring Studio 📝")
+    st.caption("Compose new questions with metadata, LaTeX math, chemical formulas, and instant live preview.")
 
-    :return:
-    """
-    # ---------------------------
-    # Streamlit UI
-    # ---------------------------
-    st.set_page_config(page_title="Question Bank Creator", layout="wide")
-    st.title("Question File Creator/Editor — Question Bank format")
-
-    output_dir_base = st.text_input("Output directory (relative to project root)", value=str(QUESTIONS_DIR))
+    output_dir_base = st.text_input("Questions Base Directory", value=str(QUESTIONS_DIR))
 
     left_col, right_col = st.columns([1, 1], gap="large")
 
     with left_col:
-        st.subheader("Question metadata")
-        topic = st.text_input("Topic (e.g. algebra, geometry)", value="")
+        st.subheader("1. Question Metadata")
+
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            class_num = st.segmented_control(
+                "Class / Grade",
+                ["XI", "XII"],
+                default="XI",
+            )
+            if not class_num:
+                class_num = "XI"
+        with m_col2:
+            difficulty = st.pills(
+                "Difficulty",
+                ["Easy", "Medium", "Hard"],
+                default="Medium",
+            )
+            if not difficulty:
+                difficulty = "Medium"
+
+        topic = st.text_input("Topic / Subject Unit (e.g. Differentiation, Thermodynamics)", value="")
         topic = topic.strip().capitalize() if topic else ""
-        class_num = st.selectbox("Class", ["XII", "XI", "X", "IX", "VIII"], index=0)
 
-        resolved_output_dir = Path(output_dir_base.strip()) / f"Class-{class_num}" / topic
+        resolved_output_dir = Path(output_dir_base.strip()) / f"Class-{class_num}" / (topic or "General")
 
-        difficulty_options = ["", "Easy", "Medium", "Hard"]
-        difficulty = st.selectbox("Difficulty", difficulty_options, index=0)
-        prev_year = st.text_input("Years in which this appeared (optional)", help="e.g. 2023", value="")
-        source = st.text_input("Source (optional)", help="e.g. NCERT, JEE 2024", value="")
-        extra_meta_text = st.text_area(
-            "Extra metadata (as JSON) — optional",
-            placeholder='{"learning_objective":"LO1", "chapter": 3}',
-            height=80,
+        col_src1, col_src2 = st.columns(2)
+        with col_src1:
+            source = st.text_input("Source Attribution", placeholder="e.g. NCERT, JEE Advanced 2024", value="")
+        with col_src2:
+            prev_year = st.text_input("Exam Years Appeared", placeholder="e.g. 2023, 2024", value="")
+
+        with st.expander("Additional Metadata (JSON)"):
+            extra_meta_text = st.text_area(
+                "Extra JSON attributes",
+                placeholder='{"learning_objective": "LO1", "chapter": 3}',
+                height=70,
+                value="",
+            )
+
+        st.write("---")
+        st.subheader("2. Question Content")
+        question_text = st.text_area(
+            "Question Statement (Markdown & LaTeX)",
+            placeholder="State the problem here. Use \\(...\\) for inline math and \\[...\\] for block equations.",
+            height=180,
             value="",
         )
 
-        st.subheader("Question content")
-        question_text = st.text_area("Question text", height=200, value="")
-        st.markdown("**Options (leave some blank for open-response)**")
+        st.markdown("**Options (Leave blank for subjective / open-response):**")
+        opt_cols = st.columns(2)
         options = []
         for i in range(4):
-            opt = st.text_input(f"Option {chr(65 + i)}")
-            options.append(opt)
+            letter = chr(65 + i)
+            with opt_cols[i % 2]:
+                opt = st.text_input(f"Option {letter}", placeholder=f"Choice {letter}")
+                options.append(opt)
 
-        options = dict(zip(["A", "B", "C", "D"], options, strict=False))
-        logger.info(f"{options=}")
+        options_dict = dict(zip(["A", "B", "C", "D"], options, strict=False))
 
-        correct_answers = st.text_input(
-            "Correct answer(s)",
-            help="Enter the option letter(s) (e.g. A, B) or the text/LaTeX answer for open-response (e.g. \ce{CaCO3}).",
+        c_col1, c_col2 = st.columns([1, 1])
+        with c_col1:
+            correct_answers = st.text_input(
+                "Correct Answer Key",
+                placeholder="e.g. B or A, C or formula",
+                help="Option letter(s) (A, B, C, D) or formula text for open response",
+            )
+        with c_col2:
+            generated_file_name = f"q_{generate_id(resolved_output_dir)}.md"
+            filename_override = st.text_input(
+                "Filename",
+                value=generated_file_name,
+                help="Target filename in the designated folder",
+            )
+
+        solution_text = st.text_area(
+            "Detailed Solution / Explanation",
+            placeholder="Write out steps, derivation, or explanation here...",
+            height=140,
+            value="",
         )
 
-        solution_text = st.text_area("Solution", height=200, value="")
-
-        generated_file_name = f"q_{generate_id(resolved_output_dir)}.md"
-
-        st.subheader("Output options")
-        filename_override = st.text_input(
-            "Filename override (optional)",
-            help="Generated from the id and the folder provided",
-            value=generated_file_name,
-        )
-        logger.info(f"Filename override: {filename_override}")
-
-        submit = st.button("Create question file")
+        st.write("")
+        submit = st.button("💾 Save Question File", type="primary", use_container_width=True)
 
     with right_col:
-        tab_preview, tab_guide = st.tabs(["🧪 Chemistry Preview", "📖 Writing Guide"])
-        
+        st.subheader("Live Preview & Syntax Helper")
+        tab_preview, tab_guide = st.tabs(["🧪 Rendered Preview", "📖 Syntax Guide"])
+
         with tab_preview:
-            st.markdown("### Real-time Rendered Preview")
-            # Build preview markdown
-            preview_md = f"### Question\n\n{question_text}\n\n"
-            
-            # Check if any options are filled
-            non_empty_opts = {k: v for k, v in options.items() if v.strip()}
+            preview_md = f"### Question\n\n{question_text or '*(Question statement will appear here)*'}\n\n"
+
+            non_empty_opts = {k: v for k, v in options_dict.items() if v and v.strip()}
             if non_empty_opts:
                 preview_md += "#### Options\n"
                 for label in ["A", "B", "C", "D"]:
-                    opt_val = options.get(label, "")
+                    opt_val = options_dict.get(label, "")
                     if opt_val.strip():
-                        preview_md += f"* **Option {label}**: {opt_val}\n"
-            
+                        is_ans = correct_answers and label in [x.strip().upper() for x in correct_answers.split(",")]
+                        marker = "✓ " if is_ans else "• "
+                        preview_md += f"{marker}**Option {label}**: {opt_val}\n"
+
             if solution_text.strip():
                 preview_md += f"\n\n#### Solution\n{solution_text}"
-                
-            render_chemistry_preview(preview_md, height=600)
-            
+
+            render_chemistry_preview(preview_md, height=580)
+
         with tab_guide:
             chemistry_help_panel()
 
@@ -180,7 +212,7 @@ def main() -> None:
             prev_year=prev_year,
             source=source,
             question=question_text,
-            options=options,
+            options=options_dict,
             solution_text=solution_text,
             correct_option=correct_answers,
             extra_metadata=extra_meta if extra_meta else None,
@@ -188,9 +220,7 @@ def main() -> None:
 
         filepath = os.path.join(resolved_output_dir, filename_override)
 
-        # write file
         try:
-            logger.info(f"Writing {qdict} to file: {filepath}")
             write_md_file(qdict, filepath)
             try:
                 upsert_question(qdict, filepath, Path(output_dir_base.strip()))
@@ -200,10 +230,11 @@ def main() -> None:
             st.error(f"Error writing file: {e}")
             return
 
-        st.success(f"Saved question to: `{filepath}` (and updated index)")
+        st.success(f"✅ Successfully saved question: `{filepath}`")
         with open(filepath, encoding="utf-8") as f:
             content = f.read()
-        st.code(content, language="md")
+        with st.expander("View Raw Saved File"):
+            st.code(content, language="markdown")
 
 
 if __name__ == "__main__":
