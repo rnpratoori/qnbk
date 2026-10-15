@@ -213,6 +213,174 @@ def render_chemistry_preview(markdown_content: str, height: int = 400):
     components.html(html_code, height=height, scrolling=True)
 
 
+
+def is_chemistry_mode() -> bool:
+    """Returns True if chemistry mode is enabled in Streamlit session state, else False."""
+    import streamlit as st
+
+    return bool(st.session_state.get("enable_chemistry", False))
+
+
+def render_chemistry_toggle() -> bool:
+    """Renders the Chemistry Mode toggle in the Streamlit sidebar, defaulting to False."""
+    import streamlit as st
+
+    if "enable_chemistry" not in st.session_state:
+        st.session_state["enable_chemistry"] = False
+
+    chem_enabled = st.sidebar.toggle(
+        "🧪 Chemistry Mode",
+        value=st.session_state["enable_chemistry"],
+        help="Enable chemistry notation (mhchem formulas and chemfig structures)",
+        key="chemistry_mode_toggle",
+    )
+    st.session_state["enable_chemistry"] = chem_enabled
+    return chem_enabled
+
+
+def render_standard_preview(markdown_content: str, height: int = 400):
+    """Renders a real-time preview of markdown content with standard MathJax (LaTeX) without chemistry overhead."""
+    import json
+    import streamlit.components.v1 as components
+
+    js_content = json.dumps(markdown_content)
+
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [['$', '$'], ['\\(', '\\)']],
+          displayMath: [['$$', '$$'], ['\\[', '\\]']],
+          processEscapes: true
+        }
+      };
+      </script>
+      <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" id="MathJax-script" async></script>
+      <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          font-size: 15px;
+          line-height: 1.6;
+          color: #31333F;
+          background-color: transparent;
+          margin: 0;
+          padding: 10px;
+        }
+        pre {
+          background-color: #f0f2f6;
+          padding: 10px;
+          border-radius: 4px;
+          overflow-x: auto;
+        }
+        code {
+          font-family: monospace;
+          background-color: #f0f2f6;
+          padding: 2px 4px;
+          border-radius: 3px;
+        }
+        table {
+          border-collapse: collapse;
+          width: 100%;
+          margin-bottom: 1rem;
+        }
+        th, td {
+          border: 1px solid #e6e9ef;
+          padding: 8px;
+          text-align: left;
+        }
+        th {
+          background-color: #f8f9fa;
+        }
+      </style>
+    </head>
+    <body>
+      <div id="content"></div>
+      <script>
+        try {
+          let markdownText = <<<JS_CONTENT>>>;
+          document.getElementById('content').innerHTML = marked.parse(markdownText);
+          if (window.MathJax && window.MathJax.typeset) {
+            window.MathJax.typeset();
+          } else {
+            document.getElementById('MathJax-script').addEventListener('load', () => {
+              window.MathJax.typeset();
+            });
+          }
+        } catch (e) {
+          document.getElementById('content').innerHTML = "<p style='color:red;'>Preview Error: " + e.message + "</p>";
+        }
+      </script>
+    </body>
+    </html>
+    """.replace("<<<JS_CONTENT>>>", js_content)
+    components.html(html_code, height=height, scrolling=True)
+
+
+def render_question_preview(markdown_content: str, height: int = 400):
+    """Renders question preview; uses MathJax+mhchem if chemistry mode is enabled,
+    otherwise renders standard LaTeX markdown."""
+    if is_chemistry_mode():
+        render_chemistry_preview(markdown_content, height=height)
+    else:
+        render_standard_preview(markdown_content, height=height)
+
+
+def math_help_panel():
+    """Renders a collapsible expander containing a standard LaTeX math syntax guide with copy-pasteable snippets."""
+    import streamlit as st
+
+    with st.expander("📖 LaTeX Writing Guide"):
+        st.markdown(r"""
+        Use standard LaTeX syntax in text fields. Enclose inline math in `$...$` or `\(...\)`, and block equations in `$$...$$` or `\[...\]`.
+
+        ### 1. Common Math Notation
+        * **Fractions**: `\frac{a}{b}` &rarr; $\frac{a}{b}$
+        * **Powers & Indices**: `x^2`, `x_{i+1}` &rarr; $x^2$, $x_{i+1}$
+        * **Roots**: `\sqrt{x}`, `\sqrt[n]{x}` &rarr; $\sqrt{x}$, $\sqrt[n]{x}$
+        * **Greek Letters**: `\alpha`, `\beta`, `\theta`, `\pi`, `\lambda`, `\Delta` &rarr; $\alpha, \beta, \theta, \pi, \lambda, \Delta$
+        * **Calculus & Operators**:
+          * Derivative: `\frac{df}{dx}`, `\frac{\partial f}{\partial x}`
+          * Integrals: `\int_{a}^{b} f(x)\,dx` &rarr; $\int_{a}^{b} f(x)\,dx$
+          * Summations: `\sum_{i=1}^{n} i^2` &rarr; $\sum_{i=1}^{n} i^2$
+          * Limits: `\lim_{x \to \infty} f(x)`
+        * **Relations & Vectors**:
+          * `\le`, `\ge`, `\approx`, `\neq`, `\pm` &rarr; $\le, \ge, \approx, \neq, \pm$
+          * `\vec{v}`, `\mathbf{F}` &rarr; $\vec{v}, \mathbf{F}$
+
+        ### 2. Matrices & Systems
+        ```latex
+        \begin{pmatrix} a & b \\ c & d \end{pmatrix}
+        ```
+        """)
+
+        st.markdown("### Quick Snippets (Click the copy button on the right)")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("Algebra & Calculus")
+            st.code(r"\frac{d}{dx}\left( x^n \right) = n x^{n-1}", language="latex")
+            st.code(r"\int_{0}^{\infty} e^{-x^2} \, dx = \frac{\sqrt{\pi}}{2}", language="latex")
+            st.code(r"\lim_{x \to 0} \frac{\sin x}{x} = 1", language="latex")
+        with col2:
+            st.caption("Symbols & Matrices")
+            st.code(r"\sum_{k=1}^{n} k = \frac{n(n+1)}{2}", language="latex")
+            st.code(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", language="latex")
+            st.code(r"\vec{F} = m \vec{a}", language="latex")
+
+
+def syntax_help_panel():
+    """Renders the appropriate writing guide based on whether Chemistry mode is enabled."""
+    if is_chemistry_mode():
+        chemistry_help_panel()
+    else:
+        math_help_panel()
+
+
 def chemistry_help_panel():
     """Renders a collapsible sidebar/expander containing a chemistry syntax guide with copy-pasteable snippets."""
     import streamlit as st
