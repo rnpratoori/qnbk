@@ -15,7 +15,7 @@ import streamlit as st
 from qnbk import DEFAULT_QUESTIONS_DIR
 from qnbk.question_index import upsert_question
 from qnbk.styles import inject_custom_css
-from qnbk.utils import chemistry_help_panel, render_chemistry_preview
+from qnbk.utils import render_chemistry_toggle, render_question_preview, syntax_help_panel
 
 st.set_page_config(
     page_title="Question File Editor",
@@ -24,6 +24,7 @@ st.set_page_config(
 )
 
 inject_custom_css()
+render_chemistry_toggle()
 
 # ----------------- Parsing Utilities -----------------
 FRONT_MATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -201,13 +202,13 @@ if raw:
 
     with edit_right:
         st.subheader("Live Rendered Preview")
-        tab_chem, tab_raw, tab_guide = st.tabs(["🧪 Rendered Preview", "📝 Raw Markdown", "📖 Writing Guide"])
-        with tab_chem:
-            render_chemistry_preview(preview_md, height=520)
+        tab_preview, tab_raw, tab_guide = st.tabs(["👁️ Rendered Preview", "📝 Raw Markdown", "📖 Writing Guide"])
+        with tab_preview:
+            render_question_preview(preview_md, height=520)
         with tab_raw:
             st.code(new_content[:10000], language="markdown")
         with tab_guide:
-            chemistry_help_panel()
+            syntax_help_panel()
 
     # Save logic
     if save_button:
