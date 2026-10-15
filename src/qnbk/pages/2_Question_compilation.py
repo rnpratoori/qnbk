@@ -21,7 +21,8 @@ from qnbk.utils import (
     escape_latex,
     md_to_latex_minimal,
     question_to_latex,
-    render_chemistry_preview,
+    render_chemistry_toggle,
+    render_question_preview,
     write_md_file,
 )
 
@@ -149,44 +150,28 @@ def show_question_dialog(q: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    t1, t2, t3 = st.tabs(["📝 Standard Preview", "🧪 Chemistry & MathJax", "📄 File Info & Raw"])
+    t1, t2 = st.tabs(["📝 Rendered Preview", "📄 File Info & Raw"])
 
     with t1:
-        st.markdown("#### Question")
-        st.markdown(q.get("question_text", "").strip(), unsafe_allow_html=True)
-
         options = q.get("options") or {}
         non_empty_opts = {k: v for k, v in options.items() if v and v.strip()}
-        if non_empty_opts:
-            st.markdown("#### Options")
-            correct_ans_raw = str(meta.get("answer") or "").upper()
-            correct_letters = [x.strip() for x in correct_ans_raw.split(",") if x.strip()]
-            for letter in ["A", "B", "C", "D"]:
-                val = options.get(letter, "")
-                if val.strip():
-                    is_correct = letter in correct_letters
-                    if is_correct:
-                        st.markdown(f"**✓ Option {letter}**: {val} *(Correct Answer)*")
-                    else:
-                        st.markdown(f"• **Option {letter}**: {val}")
-
-        if q.get("solution"):
-            st.markdown("#### Solution")
-            st.markdown(q["solution"], unsafe_allow_html=True)
-
-    with t2:
-        full_content_md = q.get("question_text", "") + "\n\n"
+        full_content_md = q.get("question_text", "").strip() + "\n\n"
         if non_empty_opts:
             full_content_md += "#### Options\n"
+            correct_ans_raw = str(meta.get("answer") or "").upper()
+            correct_letters = [x.strip() for x in correct_ans_raw.split(",") if x.strip()]
             for o in ["A", "B", "C", "D"]:
                 opt_val = options.get(o, "")
                 if opt_val.strip():
-                    full_content_md += f"* **Option {o}**: {opt_val}  \n"
+                    if o in correct_letters:
+                        full_content_md += f"* **Option {o}**: {opt_val} *(Correct Answer)*  \n"
+                    else:
+                        full_content_md += f"* **Option {o}**: {opt_val}  \n"
         if q.get("solution"):
             full_content_md += f"\n\n#### Solution\n{q['solution']}"
-        render_chemistry_preview(full_content_md, height=360)
+        render_question_preview(full_content_md, height=380)
 
-    with t3:
+    with t2:
         st.markdown(f"**File Path:** `{q.get('relpath', '-')}`")
         if meta.get("source"):
             st.markdown(f"**Source:** {meta.get('source')}")
@@ -231,6 +216,8 @@ questions = load_all_questions(str(QUESTIONS_DIR))
 # Sidebar Filters & Configuration
 # ---------------------------
 with st.sidebar:
+    render_chemistry_toggle()
+    st.write("---")
     st.header("🎯 Filter Question Bank")
 
     all_classes = sorted({q["meta"].get("class") or "None" for q in questions})
