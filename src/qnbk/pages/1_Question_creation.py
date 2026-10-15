@@ -10,7 +10,7 @@ import streamlit as st
 from qnbk import DEFAULT_QUESTIONS_DIR
 from qnbk.question_index import upsert_question
 from qnbk.styles import inject_custom_css
-from qnbk.utils import chemistry_help_panel, render_chemistry_preview, write_md_file
+from qnbk.utils import render_chemistry_toggle, render_question_preview, syntax_help_panel, write_md_file
 
 QUESTIONS_DIR = DEFAULT_QUESTIONS_DIR
 
@@ -79,7 +79,8 @@ def build_question_dict(
 def main() -> None:
     """Render question authoring page."""
     st.title("Question Authoring Studio 📝")
-    st.caption("Compose new questions with metadata, LaTeX math, chemical formulas, and instant live preview.")
+    render_chemistry_toggle()
+    st.caption("Compose new questions with metadata, LaTeX, and instant live preview.")
 
     output_dir_base = st.text_input("Questions Base Directory", value=str(QUESTIONS_DIR))
 
@@ -190,10 +191,10 @@ def main() -> None:
             if solution_text.strip():
                 preview_md += f"\n\n#### Solution\n{solution_text}"
 
-            render_chemistry_preview(preview_md, height=580)
+            render_question_preview(preview_md, height=580)
 
         with tab_guide:
-            chemistry_help_panel()
+            syntax_help_panel()
 
     if submit:
         ensure_output_dir(resolved_output_dir)
