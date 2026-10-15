@@ -1,5 +1,7 @@
 """Operational Dashboard and Introduction to Question Bank (qnbk)."""
 
+from qnbk.utils import is_chemistry_mode, render_chemistry_toggle
+
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -19,6 +21,7 @@ inject_custom_css()
 
 def main() -> None:
     """Render the modernized dashboard."""
+    render_chemistry_toggle()
     # Hero Section
     st.markdown(
         """
@@ -140,7 +143,7 @@ def main() -> None:
                 <div class="action-card-icon">📝</div>
                 <div class="action-card-title">Question Creation</div>
                 <div class="action-card-text">
-                  Author new questions with structured YAML metadata, LaTeX math, mhchem formulas, and auto-numbered IDs.
+                  Author new questions with structured YAML metadata, structured LaTeX and auto-numbered IDs.
                 </div>
               </div>
             </div>
