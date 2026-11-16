@@ -182,6 +182,15 @@ def show_question_dialog(q: dict) -> None:
         st.markdown("#### Raw File Content")
         st.code(q.get("body", ""), language="markdown")
 
+def edit_question(q: dict) -> None:
+    """Opens the question file in the local editor."""
+    editor = st.text_input("Select your local editor (e.g., 'code', 'vim', 'nano')", value="code")
+    if editor:
+        file_path = q["path"]
+        subprocess.run([editor, file_path], check=True)
+        st.success(f"Opened {file_path} in {editor}")
+        st.rerun()
+
 
 # ---------------------------
 # Main App Header & Directory Controls
@@ -475,7 +484,7 @@ for q in page_slice:
 
     with st.container():
         # Render clean question row
-        row_c1, row_c2, row_c3 = st.columns([0.6, 7.8, 1.6], gap="small", vertical_alignment="center")
+        row_c1, row_c2, row_c3, row_c4 = st.columns([0.6, 7.8, 0.8, 0.8], gap="small", vertical_alignment="center")
 
         with row_c1:
             st.checkbox(
@@ -505,6 +514,10 @@ for q in page_slice:
         with row_c3:
             if st.button("🔍", key=f"btn_inspect_{relpath}", use_container_width=False):
                 show_question_dialog(q)
+        
+        with row_c4:
+            if st.button("📝", key=f"btn_edit_{relpath}", use_container_width=False):
+                edit_question(q)
 
         st.markdown("<hr style='margin: 0.4rem 0 0.85rem 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
 
