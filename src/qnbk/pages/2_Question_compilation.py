@@ -511,7 +511,7 @@ for q in page_slice:
             st.markdown(preview_snippet, unsafe_allow_html=True)
 
         with row_c3:
-            if st.button("🔍 Inspect", key=f"btn_inspect_{relpath}", use_container_width=True):
+            if st.button("🔍", key=f"btn_inspect_{relpath}", use_container_width=False):
                 show_question_dialog(q)
         
         with row_c4:
