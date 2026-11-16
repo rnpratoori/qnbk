@@ -138,12 +138,10 @@ def show_question_dialog(q: dict) -> None:
     diff_badge = get_difficulty_badge_html(meta.get("difficulty"))
     class_badge = get_class_badge_html(meta.get("class"))
     topic_badge = get_topic_badge_html(meta.get("topic"))
-    ans_badge = get_answer_badge_html(meta.get("answer"))
-
     st.markdown(
         f"""
         <div style="margin-bottom: 1.2rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            {class_badge} {topic_badge} {diff_badge} {ans_badge}
+            {class_badge} {topic_badge} {diff_badge}
         </div>
         """,
         unsafe_allow_html=True,
@@ -478,7 +476,6 @@ for q in page_slice:
     diff_badge = get_difficulty_badge_html(meta.get("difficulty"))
     class_badge = get_class_badge_html(meta.get("class"))
     topic_badge = get_topic_badge_html(meta.get("topic"))
-    ans_badge = get_answer_badge_html(meta.get("answer"))
 
     card_class = "q-card q-card-selected" if is_selected else "q-card"
 
@@ -499,7 +496,7 @@ for q in page_slice:
             st.markdown(
                 f"""
                 <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; flex-wrap: wrap;">
-                    {class_badge} {topic_badge} {diff_badge} {ans_badge}
+                    {class_badge} {topic_badge} {diff_badge}
                     <span class="meta-label">· {q.get('relpath', '')}</span>
                 </div>
                 """,
