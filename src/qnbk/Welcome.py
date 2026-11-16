@@ -131,7 +131,7 @@ def main() -> None:
 
     # Quick Launch Action Cards
     st.subheader("🚀 Quick Actions")
-    a1, a2, a3 = st.columns(3)
+    a1, a2 = st.columns(2)
 
     with a1:
         st.markdown(
@@ -169,23 +169,6 @@ def main() -> None:
         if st.button("Go to Compiler →", key="nav_compile", use_container_width=True):
             st.switch_page("pages/2_Question_compilation.py")
 
-    with a3:
-        st.markdown(
-            """
-            <div class="action-card">
-              <div>
-                <div class="action-card-icon">✏️</div>
-                <div class="action-card-title">Question Editor</div>
-                <div class="action-card-text">
-                  Load existing markdown question files, tweak wording or metadata, and update the index with real-time preview.
-                </div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("Go to Editor →", key="nav_edit", use_container_width=True):
-            st.switch_page("pages/3_Question_editor.py")
 
     st.write("")
     st.write("---")
