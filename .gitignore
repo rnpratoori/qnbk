@@ -180,3 +180,6 @@ dmypy.json
 ./__init__.py
 src/__init__.py
 tests/__init__.py
+
+# Images
+data/images/
