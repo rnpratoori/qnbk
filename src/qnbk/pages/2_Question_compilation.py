@@ -2,7 +2,9 @@
 
 import datetime
 from itertools import groupby
+import os
 from pathlib import Path
+import shutil
 import subprocess
 
 from loguru import logger
@@ -182,13 +184,33 @@ def show_question_dialog(q: dict) -> None:
         st.code(q.get("body", ""), language="markdown")
 
 def edit_question(q: dict) -> None:
-    """Opens the question file in the local editor."""
-    editor = st.text_input("Select your local editor (e.g., 'code', 'vim', 'nano')", value="code")
-    if editor:
-        file_path = q["path"]
-        subprocess.run([editor, file_path], check=True)
-        st.success(f"Opened {file_path} in {editor}")
-        st.rerun()
+    """Opens the question file in the local editor in Windows (without WSL remote connection)."""
+    file_path = str(q.get("path", ""))
+    if not file_path:
+        st.error("Question file path not found.")
+        return
+
+    # Check if running inside WSL
+    is_wsl = "WSL_DISTRO_NAME" in os.environ or os.path.exists("/proc/sys/fs/binfmt_misc/WSLInterop")
+
+    if is_wsl and shutil.which("wslpath"):
+        try:
+            # Convert WSL path (/home/ranga/...) to Windows UNC path (\\wsl.localhost\Ubuntu\home\ranga\...)
+            win_path = subprocess.check_output(["wslpath", "-w", file_path], text=True).strip()
+            # Launch via cmd.exe so Windows executes native code.cmd directly on the host,
+            # opening the file in the local Windows VS Code instance instead of attaching WSL remote.
+            subprocess.Popen(["cmd.exe", "/c", "code", "-r", win_path])
+            st.toast(f"Opened {q.get('relpath', 'file')} in Windows VS Code")
+            return
+        except Exception as e:
+            logger.warning(f"Could not open via Windows cmd: {e}")
+
+    # Fallback for native environment or if Windows interop fails
+    try:
+        subprocess.Popen(["code", "-r", file_path])
+        st.toast(f"Opened {q.get('relpath', 'file')} in VS Code")
+    except Exception as e:
+        st.error(f"Failed to open editor: {e}")
 
 
 # ---------------------------
