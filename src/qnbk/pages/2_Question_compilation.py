@@ -48,7 +48,7 @@ inject_custom_css()
 # Utilities & Data Loading
 # ---------------------------
 @st.cache_data(ttl=120, show_spinner="Loading questions...")
-def load_all_questions(qdir: str) -> list[dict]:
+def load_all_questions(qdir: Path) -> list[dict]:
     """Load questions from SQLite index with automatic filesystem rebuild fallback."""
     return load_indexed_questions(qdir)
 
@@ -216,7 +216,7 @@ if not QUESTIONS_DIR.exists():
     st.error(f"Questions directory '{QUESTIONS_DIR}' not found. Please ensure it exists.")
     st.stop()
 
-questions = load_all_questions(str(QUESTIONS_DIR))
+questions = load_all_questions(QUESTIONS_DIR)
 
 # ---------------------------
 # Sidebar Filters & Configuration
